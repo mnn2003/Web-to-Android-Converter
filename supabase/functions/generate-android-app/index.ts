@@ -12,12 +12,11 @@ const corsHeaders = {
 interface AppConfig {
   websiteUrl: string;
   appName: string;
-  icon: string; // base64 encoded image
+  icon: string;
   enableNotifications: boolean;
   enableMusicControls: boolean;
 }
 
-// Initialize Supabase client
 const supabaseClient = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
@@ -37,11 +36,9 @@ async function generateAndroidApp(config: AppConfig) {
       enableMusicControls: config.enableMusicControls
     });
 
-    // Create a unique identifier for this app
     const appId = `${Date.now()}-${config.appName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const tempDir = `/tmp/app-${appId}`;
     
-    // Create temp directory
     await mkdir(tempDir, { recursive: true });
     console.log('Created temp directory:', tempDir);
 
@@ -55,14 +52,11 @@ async function generateAndroidApp(config: AppConfig) {
     await writeFile(iconPath, iconData);
     console.log('Saved icon to:', iconPath);
 
-    // Generate Android app files
     const packageName = config.appName.toLowerCase().replace(/[^a-z0-9]/g, '');
     
-    // Create basic Android project structure
     const srcDir = join(tempDir, 'app/src/main/java', packageName);
     await mkdir(srcDir, { recursive: true });
     
-    // Create MainActivity.java
     const mainActivityPath = join(srcDir, 'MainActivity.java');
     const mainActivityContent = `
 package ${packageName};
