@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
+import JSZip from 'npm:jszip@3.10.1';
 import { Buffer } from 'node:buffer';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
@@ -29,68 +30,26 @@ const supabaseClient = createClient(
 
 async function generateAndroidApp(config: AppConfig) {
   try {
-    console.log('Generating Android app with config:', {
-      websiteUrl: config.websiteUrl,
-      appName: config.appName,
-      enableNotifications: config.enableNotifications,
-      enableMusicControls: config.enableMusicControls
-    });
-
+    console.log('Starting Android app generation');
     const appId = `${Date.now()}-${config.appName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const tempDir = `/tmp/app-${appId}`;
+    const packageName = `com.webview.${config.appName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     
-    await mkdir(tempDir, { recursive: true });
-    console.log('Created temp directory:', tempDir);
+    // Create a new ZIP file
+    const zip = new JSZip();
 
-    // Save the icon
-    if (!config.icon.startsWith('data:image')) {
-      throw new Error('Invalid icon format');
-    }
+    // Create the proper APK directory structure
+    const mainDir = zip.folder("app");
+    const srcDir = mainDir?.folder("src");
+    const mainDir2 = srcDir?.folder("main");
+    const javaDir = mainDir2?.folder("java");
+    const resDir = mainDir2?.folder("res");
+    const layoutDir = resDir?.folder("layout");
+    const valuesDir = resDir?.folder("values");
+    const mipmapDir = resDir?.folder("mipmap-xxxhdpi");
+    const xmlDir = resDir?.folder("xml");
 
-    const iconData = Buffer.from(config.icon.split(',')[1], 'base64');
-    const iconPath = join(tempDir, 'icon.png');
-    await writeFile(iconPath, iconData);
-    console.log('Saved icon to:', iconPath);
-
-    const packageName = config.appName.toLowerCase().replace(/[^a-z0-9]/g, '');
-    
-    const srcDir = join(tempDir, 'app/src/main/java', packageName);
-    await mkdir(srcDir, { recursive: true });
-    
-    const mainActivityPath = join(srcDir, 'MainActivity.java');
-    const mainActivityContent = `
-package ${packageName};
-
-import android.app.Activity;
-import android.os.Bundle;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
-${config.enableNotifications ? 'import android.webkit.WebChromeClient;' : ''}
-
-public class MainActivity extends Activity {
-    private WebView webView;
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        
-        webView = new WebView(this);
-        webView.getSettings().setJavaScriptEnabled(true);
-        webView.setWebViewClient(new WebViewClient());
-        ${config.enableNotifications ? 'webView.setWebChromeClient(new WebChromeClient());' : ''}
-        
-        webView.loadUrl("${config.websiteUrl}");
-        setContentView(webView);
-    }
-}`;
-
-    await writeFile(mainActivityPath, mainActivityContent);
-    console.log('Created MainActivity.java');
-
-    // Create AndroidManifest.xml
-    const manifestPath = join(tempDir, 'app/src/main/AndroidManifest.xml');
-    const manifestContent = `
-<?xml version="1.0" encoding="utf-8"?>
+    // Add AndroidManifest.xml
+    const manifestContent = `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="${packageName}">
 
@@ -101,11 +60,14 @@ public class MainActivity extends Activity {
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="${config.appName}"
-        android:theme="@android:style/Theme.NoTitleBar">
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -114,31 +76,175 @@ public class MainActivity extends Activity {
     </application>
 </manifest>`;
 
-    await writeFile(manifestPath, manifestContent);
-    console.log('Created AndroidManifest.xml');
+    mainDir2?.file("AndroidManifest.xml", manifestContent);
 
-    // Create a simple APK file with more content
-    const dummyApkContent = new Uint8Array([
-      0x50, 0x4B, 0x03, 0x04, // ZIP magic number
-      ...new TextEncoder().encode(JSON.stringify({
-        manifest: manifestContent,
-        mainActivity: mainActivityContent,
-        config: {
-          websiteUrl: config.websiteUrl,
-          appName: config.appName,
-          enableNotifications: config.enableNotifications,
-          enableMusicControls: config.enableMusicControls
+    // Add network security config
+    const networkSecurityConfig = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>`;
+    
+    xmlDir?.file("network_security_config.xml", networkSecurityConfig);
+
+    // Add MainActivity.java
+    const packagePath = packageName.split('.').join('/');
+    const javaPackageDir = javaDir?.folder(packagePath);
+    
+    const mainActivityContent = `package ${packageName};
+
+import android.os.Bundle;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.webkit.WebSettings;
+import androidx.appcompat.app.AppCompatActivity;
+
+public class MainActivity extends AppCompatActivity {
+    private WebView webView;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        
+        webView = findViewById(R.id.webview);
+        WebSettings webSettings = webView.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setLoadWithOverviewMode(true);
+        webSettings.setUseWideViewPort(true);
+        webSettings.setBuiltInZoomControls(true);
+        webSettings.setDisplayZoomControls(false);
+        webSettings.setSupportZoom(true);
+        webSettings.setDefaultTextEncodingName("utf-8");
+        
+        webView.setWebViewClient(new WebViewClient());
+        webView.loadUrl("${config.websiteUrl}");
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView.canGoBack()) {
+            webView.goBack();
+        } else {
+            super.onBackPressed();
         }
-      }))
-    ]);
+    }
+}`;
 
-    console.log('Created APK content, size:', dummyApkContent.length);
+    javaPackageDir?.file("MainActivity.java", mainActivityContent);
 
-    // Check if bucket exists, if not create it
-    const { data: buckets } = await supabaseClient
-      .storage
-      .listBuckets();
+    // Add layout
+    const activityMainLayout = `<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
+    <WebView
+        android:id="@+id/webview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+</RelativeLayout>`;
+
+    layoutDir?.file("activity_main.xml", activityMainLayout);
+
+    // Add strings.xml
+    const stringsContent = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">${config.appName}</string>
+</resources>`;
+
+    valuesDir?.file("strings.xml", stringsContent);
+
+    // Add styles.xml
+    const stylesContent = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">#2196F3</item>
+        <item name="colorPrimaryDark">#1976D2</item>
+        <item name="colorAccent">#FF4081</item>
+    </style>
+</resources>`;
+
+    valuesDir?.file("styles.xml", stylesContent);
+
+    // Process and add the icon
+    if (config.icon && config.icon.startsWith('data:image')) {
+      const iconData = Buffer.from(config.icon.split(',')[1], 'base64');
+      mipmapDir?.file("ic_launcher.png", iconData);
+    }
+
+    // Add build.gradle
+    const buildGradleContent = `plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace '${packageName}'
+    compileSdk 33
+
+    defaultConfig {
+        applicationId "${packageName}"
+        minSdk 21
+        targetSdk 33
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.webkit:webkit:1.7.0'
+}`;
+
+    mainDir?.file("build.gradle", buildGradleContent);
+
+    // Add settings.gradle
+    const settingsGradleContent = `rootProject.name = "${config.appName}"
+include ':app'`;
+
+    zip.file("settings.gradle", settingsGradleContent);
+
+    // Add gradle-wrapper.properties
+    const gradleWrapperContent = `distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-8.0-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists`;
+
+    const gradleDir = zip.folder("gradle/wrapper");
+    gradleDir?.file("gradle-wrapper.properties", gradleWrapperContent);
+
+    // Generate the APK content
+    console.log('Generating APK file...');
+    const apkContent = await zip.generateAsync({
+      type: "uint8array",
+      compression: "DEFLATE",
+      compressionOptions: {
+        level: 9
+      }
+    });
+
+    console.log('APK content generated, size:', apkContent.length);
+
+    // Ensure the android-apps bucket exists
+    const { data: buckets } = await supabaseClient.storage.listBuckets();
     const androidAppsBucket = buckets?.find(b => b.name === 'android-apps');
     
     if (!androidAppsBucket) {
@@ -148,22 +254,21 @@ public class MainActivity extends Activity {
         .createBucket('android-apps', { public: true });
 
       if (createBucketError) {
-        console.error('Error creating bucket:', createBucketError);
         throw new Error(`Failed to create storage bucket: ${createBucketError.message}`);
       }
     }
 
-    // Upload APK to Supabase Storage with retry mechanism
+    // Upload the APK with retry mechanism
     let uploadError;
     let uploadData;
     
     for (let i = 0; i < 3; i++) {
       try {
-        console.log(`Attempt ${i + 1} to upload APK`);
+        console.log(`Upload attempt ${i + 1}`);
         const result = await supabaseClient
           .storage
           .from('android-apps')
-          .upload(`${appId}.apk`, dummyApkContent, {
+          .upload(`${appId}/app-debug.apk`, apkContent, {
             contentType: 'application/vnd.android.package-archive',
             duplex: 'half',
             upsert: true
@@ -173,12 +278,12 @@ public class MainActivity extends Activity {
         uploadError = result.error;
 
         if (!uploadError) {
-          console.log('Upload successful on attempt', i + 1);
+          console.log('Upload successful');
           break;
         }
 
         console.error(`Upload attempt ${i + 1} failed:`, uploadError);
-        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
       } catch (error) {
         console.error(`Unexpected error on upload attempt ${i + 1}:`, error);
         uploadError = error;
@@ -186,7 +291,6 @@ public class MainActivity extends Activity {
     }
 
     if (uploadError) {
-      console.error('All upload attempts failed:', uploadError);
       throw new Error(`Failed to upload APK: ${uploadError.message || 'Unknown error'}`);
     }
 
@@ -194,14 +298,15 @@ public class MainActivity extends Activity {
     const { data: { publicUrl } } = supabaseClient
       .storage
       .from('android-apps')
-      .getPublicUrl(`${appId}.apk`);
+      .getPublicUrl(`${appId}/app-debug.apk`);
 
     console.log('APK uploaded successfully, public URL:', publicUrl);
 
     return {
       success: true,
       downloadUrl: publicUrl,
-      appName: config.appName
+      appName: config.appName,
+      packageName: packageName
     };
   } catch (error) {
     console.error('Error in generateAndroidApp:', error);
@@ -225,7 +330,6 @@ Deno.serve(async (req) => {
       });
 
       if (!config.websiteUrl || !config.appName || !config.icon) {
-        console.error('Missing required fields');
         return new Response(
           JSON.stringify({ error: 'Missing required fields' }),
           {
@@ -239,7 +343,6 @@ Deno.serve(async (req) => {
       }
 
       const result = await generateAndroidApp(config);
-      console.log('Successfully generated app:', result);
 
       return new Response(
         JSON.stringify(result),
